@@ -1,0 +1,9 @@
+RewriteEngine On
+RewriteBase /shortlink/
+
+# Non riscrivere file e cartelle esistenti
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Tutto il resto va a index.php con parametro c
+RewriteRule ^([a-zA-Z0-9_-]+)$ index.php?c=$1 [L,QSA]
