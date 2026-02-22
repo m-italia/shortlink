@@ -7,74 +7,51 @@ require_once '../includes/functions.php';
 requireLogin();
 
 $id = intval($_GET['id'] ?? 0);
-
-if (!$id) {
-    header('Location: dashboard.php');
-    exit;
-}
+if (!$id) { header('Location: dashboard.php'); exit; }
 
 $stmt = $pdo->prepare("SELECT * FROM links WHERE id = ?");
 $stmt->execute([$id]);
 $link = $stmt->fetch();
+if (!$link) { header('Location: dashboard.php'); exit; }
 
-if (!$link) {
-    header('Location: dashboard.php');
-    exit;
-}
-
-// Totale click
 $totaleClick = $pdo->prepare("SELECT COUNT(*) FROM clicks WHERE link_id = ?");
 $totaleClick->execute([$id]);
 $totaleClick = $totaleClick->fetchColumn();
 
-// Click per device
 $perDevice = $pdo->prepare("SELECT device, COUNT(*) as totale FROM clicks WHERE link_id = ? GROUP BY device ORDER BY totale DESC");
 $perDevice->execute([$id]);
 $perDevice = $perDevice->fetchAll();
 
-// Click per browser
 $perBrowser = $pdo->prepare("SELECT browser, COUNT(*) as totale FROM clicks WHERE link_id = ? GROUP BY browser ORDER BY totale DESC");
 $perBrowser->execute([$id]);
 $perBrowser = $perBrowser->fetchAll();
 
-// Click per giorno (ultimi 30 giorni)
-$perGiorno = $pdo->prepare("
-    SELECT DATE(timestamp) as giorno, COUNT(*) as totale 
-    FROM clicks WHERE link_id = ? 
-    AND timestamp >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-    GROUP BY DATE(timestamp) ORDER BY giorno ASC
-");
+$perGiorno = $pdo->prepare("SELECT DATE(timestamp) as giorno, COUNT(*) as totale FROM clicks WHERE link_id = ? AND timestamp >= DATE_SUB(NOW(), INTERVAL 30 DAY) GROUP BY DATE(timestamp) ORDER BY giorno ASC");
 $perGiorno->execute([$id]);
 $perGiorno = $perGiorno->fetchAll();
 
-// Click per ora del giorno
-$perOra = $pdo->prepare("
-    SELECT HOUR(timestamp) as ora, COUNT(*) as totale 
-    FROM clicks WHERE link_id = ?
-    GROUP BY HOUR(timestamp) ORDER BY ora ASC
-");
+$perOra = $pdo->prepare("SELECT HOUR(timestamp) as ora, COUNT(*) as totale FROM clicks WHERE link_id = ? GROUP BY HOUR(timestamp) ORDER BY ora ASC");
 $perOra->execute([$id]);
 $perOraRaw = $perOra->fetchAll();
 
-// Riempi tutte le 24 ore (anche quelle senza click)
 $perOraCompleto = array_fill(0, 24, 0);
-foreach ($perOraRaw as $row) {
-    $perOraCompleto[(int)$row['ora']] = (int)$row['totale'];
-}
+foreach ($perOraRaw as $row) { $perOraCompleto[(int)$row['ora']] = (int)$row['totale']; }
 
-// Ultimi 20 click
+// Geolocalizzazione per paese
+$perPaese = $pdo->prepare("SELECT paese, COUNT(*) as totale FROM clicks WHERE link_id = ? AND paese IS NOT NULL AND paese != '' GROUP BY paese ORDER BY totale DESC LIMIT 10");
+$perPaese->execute([$id]);
+$perPaese = $perPaese->fetchAll();
+
 $ultimiClick = $pdo->prepare("SELECT * FROM clicks WHERE link_id = ? ORDER BY timestamp DESC LIMIT 20");
 $ultimiClick->execute([$id]);
 $ultimiClick = $ultimiClick->fetchAll();
 
-// Prepara dati JSON per Chart.js
-$giorniLabel = array_map(fn($r) => date('d/m', strtotime($r['giorno'])), $perGiorno);
-$giorniData  = array_map(fn($r) => (int)$r['totale'], $perGiorno);
-
+$giorniLabel  = array_map(fn($r) => date('d/m', strtotime($r['giorno'])), $perGiorno);
+$giorniData   = array_map(fn($r) => (int)$r['totale'], $perGiorno);
 $deviceLabels = array_map(fn($r) => $r['device'], $perDevice);
 $deviceData   = array_map(fn($r) => (int)$r['totale'], $perDevice);
-
-$oreLabel = array_map(fn($h) => sprintf('%02d:00', $h), range(0, 23));
+$oreLabel     = array_map(fn($h) => sprintf('%02d:00', $h), range(0, 23));
+$totaleDevice = array_sum(array_column($perDevice, 'totale'));
 ?>
 <!DOCTYPE html>
 <html lang="it">
@@ -82,185 +59,138 @@ $oreLabel = array_map(fn($h) => sprintf('%02d:00', $h), range(0, 23));
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Statistiche — ShortLink</title>
+    <link href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@300;400;600;700;900&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #f0f2f5;
-            min-height: 100vh;
-        }
+        body { font-family: 'Titillium Web', sans-serif; background: #f4f4f4; min-height: 100vh; }
         header {
-            background: #1a1a2e;
-            color: white;
-            padding: 16px 30px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+            background: #000; padding: 0 40px; display: flex; align-items: center;
+            justify-content: space-between; height: 64px; position: sticky; top: 0; z-index: 100;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
         }
-        header h1 { font-size: 20px; }
-        header a { color: #a5b4fc; text-decoration: none; font-size: 14px; }
-        .container { padding: 30px; max-width: 1100px; margin: 0 auto; }
+        .header-logo a { display: block; line-height: 0; }
+        .header-logo img { height: 32px; display: block; }
+        header a { color: #fff; text-decoration: none; font-size: 14px; font-weight: 600; padding: 8px 16px; border-radius: 6px; transition: background 0.2s; }
+        header a:hover { background: #222; }
+
+        .container { padding: 32px 40px; max-width: 1200px; margin: 0 auto; }
+        .page-title { font-size: 24px; font-weight: 700; color: #000; margin-bottom: 24px; }
+        .page-title span { color: #d20a10; }
 
         .info-card {
-            background: linear-gradient(135deg, #1a1a2e 0%, #4f46e5 100%);
-            border-radius: 16px;
-            padding: 28px;
-            margin-bottom: 24px;
-            color: white;
+            background: #000; border-radius: 12px; padding: 28px; margin-bottom: 24px; color: white;
+            border-left: 5px solid #d20a10;
         }
-        .info-card h2 { font-size: 20px; margin-bottom: 12px; }
-        .info-card .meta { font-size: 14px; opacity: 0.8; line-height: 2; }
-        .info-card .short-url { color: #a5b4fc; font-weight: 600; }
+        .info-card h2 { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+        .info-card .meta { font-size: 14px; opacity: 0.7; line-height: 2.2; }
+        .info-card .short-url { color: #d20a10; font-weight: 700; }
 
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        .stat-box {
-            background: white;
-            padding: 24px;
-            border-radius: 16px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-            text-align: center;
-            border-top: 4px solid #4f46e5;
-        }
-        .stat-box .numero {
-            font-size: 40px;
-            font-weight: 800;
-            background: linear-gradient(135deg, #4f46e5, #818cf8);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .stat-box .label { font-size: 13px; color: #888; margin-top: 6px; font-weight: 500; }
+        .hero-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+        .stat-box { background: white; padding: 22px 18px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-left: 4px solid #d20a10; text-align: center; }
+        .stat-box .numero { font-size: 40px; font-weight: 900; color: #d20a10; line-height: 1; }
+        .stat-box .label { font-size: 11px; color: #888; margin-top: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
 
-        .card {
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-            padding: 28px;
-            margin-bottom: 24px;
-        }
-        .card h2 { font-size: 16px; color: #1a1a2e; margin-bottom: 20px; font-weight: 700; }
+        .card { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); padding: 24px; margin-bottom: 24px; }
+        .card h2 { font-size: 13px; color: #000; margin-bottom: 20px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; border-left: 3px solid #d20a10; padding-left: 10px; }
 
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 24px;
-            margin-bottom: 24px;
-        }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
 
-        .chart-container { position: relative; }
+        .bar-item { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+        .bar-label { font-size: 13px; color: #333; width: 80px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .bar-wrap { flex: 1; background: #f0f0f0; border-radius: 20px; height: 8px; }
+        .bar-fill { height: 8px; border-radius: 20px; background: #d20a10; }
+        .bar-count { font-size: 13px; color: #888; width: 30px; text-align: right; font-weight: 600; }
 
         table { width: 100%; border-collapse: collapse; }
-        th {
-            text-align: left;
-            padding: 10px 16px;
-            font-size: 12px;
-            font-weight: 600;
-            color: #888;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        td {
-            padding: 12px 16px;
-            font-size: 14px;
-            border-bottom: 1px solid #f9f9f9;
-            color: #333;
-        }
+        th { text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 1px; border-bottom: 2px solid #f0f0f0; }
+        td { padding: 13px 16px; font-size: 14px; border-bottom: 1px solid #f5f5f5; color: #333; }
         tr:last-child td { border-bottom: none; }
         tr:hover td { background: #fafafa; }
-        .badge {
-            display: inline-block;
-            padding: 3px 10px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            background: #ede9fe;
-            color: #4f46e5;
-        }
+        .badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; background: #000; color: #fff; }
         .empty { text-align: center; padding: 40px; color: #bbb; font-size: 14px; }
+
+        .back-link { display: inline-block; margin-bottom: 20px; color: #d20a10; text-decoration: none; font-weight: 700; font-size: 14px; }
+        .back-link:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
     <header>
-        <h1>🔗 ShortLink</h1>
+        <div class="header-logo"><a href="dashboard.php"><img src="../assets/logo.svg" alt="Logo"></a></div>
         <a href="dashboard.php">← Dashboard</a>
     </header>
 
     <div class="container">
+        <div class="page-title">Statistiche <span>·</span> <?= htmlspecialchars($link['titolo'] ?? '/' . $link['codice']) ?></div>
 
         <div class="info-card">
             <h2><?= htmlspecialchars($link['titolo'] ?? 'Link senza titolo') ?></h2>
             <div class="meta">
-                <strong>Short URL:</strong> 
-                <span class="short-url">http://localhost:8888/shortlink/<?= htmlspecialchars($link['codice']) ?></span><br>
+                <strong>Short URL:</strong> <span class="short-url">http://localhost:8888/shortlink/<?= htmlspecialchars($link['codice']) ?></span><br>
                 <strong>Destinazione:</strong> <?= htmlspecialchars($link['url_destinazione']) ?><br>
                 <strong>Creato il:</strong> <?= formattaData($link['creato_il']) ?>
             </div>
         </div>
 
-        <div class="stats">
-            <div class="stat-box">
-                <div class="numero"><?= $totaleClick ?></div>
-                <div class="label">Click totali</div>
-            </div>
-            <div class="stat-box">
-                <div class="numero"><?= count($perDevice) ?></div>
-                <div class="label">Tipi di device</div>
-            </div>
-            <div class="stat-box">
-                <div class="numero"><?= count($perBrowser) ?></div>
-                <div class="label">Browser diversi</div>
-            </div>
+        <div class="hero-stats">
+            <div class="stat-box"><div class="numero"><?= $totaleClick ?></div><div class="label">Click totali</div></div>
+            <div class="stat-box"><div class="numero"><?= count($perDevice) ?></div><div class="label">Tipi di device</div></div>
+            <div class="stat-box"><div class="numero"><?= count($perBrowser) ?></div><div class="label">Browser diversi</div></div>
         </div>
 
-        <!-- Grafico andamento click nel tempo -->
         <div class="card">
-            <h2>📈 Andamento click — ultimi 30 giorni</h2>
+            <h2>Andamento click — ultimi 30 giorni</h2>
             <?php if (empty($perGiorno)): ?>
-                <div class="empty">Nessun click ancora — condividi il link!</div>
+                <div class="empty">Nessun click ancora</div>
             <?php else: ?>
-            <div class="chart-container">
                 <canvas id="chartTempo" height="80"></canvas>
-            </div>
             <?php endif; ?>
         </div>
 
         <div class="grid-2">
-            <!-- Grafico device donut -->
             <div class="card">
-                <h2>📱 Device</h2>
+                <h2>Device</h2>
                 <?php if (empty($perDevice)): ?>
                     <div class="empty">Nessun dato ancora</div>
                 <?php else: ?>
-                <div class="chart-container">
-                    <canvas id="chartDevice" height="200"></canvas>
-                </div>
+                    <?php foreach ($perDevice as $d): ?>
+                    <div class="bar-item">
+                        <div class="bar-label"><?= htmlspecialchars($d['device']) ?></div>
+                        <div class="bar-wrap"><div class="bar-fill" style="width:<?= $totaleDevice > 0 ? ($d['totale']/$totaleDevice)*100 : 0 ?>%"></div></div>
+                        <div class="bar-count"><?= $d['totale'] ?></div>
+                    </div>
+                    <?php endforeach; ?>
                 <?php endif; ?>
             </div>
-
-            <!-- Grafico ora del giorno -->
             <div class="card">
-                <h2>🕐 Click per ora del giorno</h2>
+                <h2>Click per ora del giorno</h2>
                 <?php if ($totaleClick == 0): ?>
                     <div class="empty">Nessun dato ancora</div>
                 <?php else: ?>
-                <div class="chart-container">
                     <canvas id="chartOre" height="200"></canvas>
-                </div>
                 <?php endif; ?>
             </div>
         </div>
 
-        <!-- Tabella ultimi click -->
+        <?php if (!empty($perPaese)): ?>
         <div class="card">
-            <h2>🕐 Ultimi click</h2>
+            <h2>Paesi</h2>
+            <?php
+            $totalePaese = array_sum(array_column($perPaese, 'totale'));
+            foreach ($perPaese as $p): ?>
+            <div class="bar-item">
+                <div class="bar-label"><?= htmlspecialchars($p['paese'] ?: 'Sconosciuto') ?></div>
+                <div class="bar-wrap"><div class="bar-fill" style="width:<?= $totalePaese > 0 ? ($p['totale']/$totalePaese)*100 : 0 ?>%"></div></div>
+                <div class="bar-count"><?= $p['totale'] ?></div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+
+        <div class="card">
+            <h2>Ultimi click</h2>
             <?php if (empty($ultimiClick)): ?>
-                <div class="empty">Nessun click ancora — condividi il link!</div>
+                <div class="empty">Nessun click ancora</div>
             <?php else: ?>
             <table>
                 <thead>
@@ -268,6 +198,7 @@ $oreLabel = array_map(fn($h) => sprintf('%02d:00', $h), range(0, 23));
                         <th>Data e ora</th>
                         <th>Device</th>
                         <th>Browser</th>
+                        <th>Paese</th>
                         <th>IP</th>
                     </tr>
                 </thead>
@@ -277,6 +208,7 @@ $oreLabel = array_map(fn($h) => sprintf('%02d:00', $h), range(0, 23));
                         <td><?= formattaData($click['timestamp']) ?></td>
                         <td><span class="badge"><?= htmlspecialchars($click['device'] ?? '—') ?></span></td>
                         <td><?= htmlspecialchars($click['browser'] ?? '—') ?></td>
+                        <td><?= htmlspecialchars($click['paese'] ?? '—') ?></td>
                         <td><?= htmlspecialchars($click['ip'] ?? '—') ?></td>
                     </tr>
                     <?php endforeach; ?>
@@ -284,126 +216,23 @@ $oreLabel = array_map(fn($h) => sprintf('%02d:00', $h), range(0, 23));
             </table>
             <?php endif; ?>
         </div>
-
     </div>
 
     <script>
-    const violet = '#4f46e5';
-    const violetLight = '#818cf8';
-    const violetUltraLight = '#ede9fe';
-
-    Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    Chart.defaults.font.family = "'Titillium Web', sans-serif";
     Chart.defaults.color = '#888';
-
     <?php if (!empty($perGiorno)): ?>
-    // Grafico andamento nel tempo
     new Chart(document.getElementById('chartTempo'), {
         type: 'line',
-        data: {
-            labels: <?= json_encode($giorniLabel) ?>,
-            datasets: [{
-                label: 'Click',
-                data: <?= json_encode($giorniData) ?>,
-                borderColor: violet,
-                backgroundColor: 'rgba(79, 70, 229, 0.08)',
-                borderWidth: 3,
-                pointBackgroundColor: violet,
-                pointRadius: 5,
-                pointHoverRadius: 7,
-                fill: true,
-                tension: 0.4
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: '#1a1a2e',
-                    titleColor: '#a5b4fc',
-                    bodyColor: '#fff',
-                    padding: 12,
-                    cornerRadius: 8
-                }
-            },
-            scales: {
-                x: { grid: { display: false } },
-                y: {
-                    beginAtZero: true,
-                    ticks: { stepSize: 1 },
-                    grid: { color: '#f0f0f0' }
-                }
-            }
-        }
+        data: { labels: <?= json_encode($giorniLabel) ?>, datasets: [{ label: 'Click', data: <?= json_encode($giorniData) ?>, borderColor: '#d20a10', backgroundColor: 'rgba(210,10,16,0.06)', borderWidth: 3, pointBackgroundColor: '#d20a10', pointRadius: 4, fill: true, tension: 0.4 }] },
+        options: { responsive: true, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#000', titleColor: '#d20a10', bodyColor: '#fff', padding: 12, cornerRadius: 6 } }, scales: { x: { grid: { display: false } }, y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: '#f5f5f5' } } } }
     });
     <?php endif; ?>
-
-    <?php if (!empty($perDevice)): ?>
-    // Grafico device donut
-    new Chart(document.getElementById('chartDevice'), {
-        type: 'doughnut',
-        data: {
-            labels: <?= json_encode($deviceLabels) ?>,
-            datasets: [{
-                data: <?= json_encode($deviceData) ?>,
-                backgroundColor: ['#4f46e5', '#818cf8', '#c7d2fe'],
-                borderWidth: 0,
-                hoverOffset: 6
-            }]
-        },
-        options: {
-            responsive: true,
-            cutout: '65%',
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: { padding: 16, font: { size: 13 } }
-                },
-                tooltip: {
-                    backgroundColor: '#1a1a2e',
-                    titleColor: '#a5b4fc',
-                    bodyColor: '#fff',
-                    padding: 12,
-                    cornerRadius: 8
-                }
-            }
-        }
-    });
-    <?php endif; ?>
-
     <?php if ($totaleClick > 0): ?>
-    // Grafico ore del giorno
     new Chart(document.getElementById('chartOre'), {
         type: 'bar',
-        data: {
-            labels: <?= json_encode($oreLabel) ?>,
-            datasets: [{
-                label: 'Click',
-                data: <?= json_encode(array_values($perOraCompleto)) ?>,
-                backgroundColor: 'rgba(79, 70, 229, 0.15)',
-                borderColor: violet,
-                borderWidth: 2,
-                borderRadius: 6,
-                hoverBackgroundColor: 'rgba(79, 70, 229, 0.4)'
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: '#1a1a2e',
-                    titleColor: '#a5b4fc',
-                    bodyColor: '#fff',
-                    padding: 12,
-                    cornerRadius: 8
-                }
-            },
-            scales: {
-                x: { grid: { display: false }, ticks: { maxRotation: 45, font: { size: 10 } } },
-                y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: '#f0f0f0' } }
-            }
-        }
+        data: { labels: <?= json_encode($oreLabel) ?>, datasets: [{ label: 'Click', data: <?= json_encode(array_values($perOraCompleto)) ?>, backgroundColor: 'rgba(210,10,16,0.12)', borderColor: '#d20a10', borderWidth: 2, borderRadius: 4 }] },
+        options: { responsive: true, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#000', titleColor: '#d20a10', bodyColor: '#fff', padding: 12, cornerRadius: 6 } }, scales: { x: { grid: { display: false }, ticks: { maxRotation: 45, font: { size: 9 } } }, y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: '#f5f5f5' } } } }
     });
     <?php endif; ?>
     </script>

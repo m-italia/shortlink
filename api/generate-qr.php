@@ -9,10 +9,45 @@ requireLogin();
 use chillerlan\QRCode\QRCode;
 use chillerlan\QRCode\QROptions;
 
-$data   = $_POST['data'] ?? 'https://esempio.com';
-$colore = $_POST['colore'] ?? '#000000';
-$sfondo = $_POST['sfondo'] ?? '#ffffff';
-$stile  = $_POST['stile'] ?? 'quadrati';
+$data      = $_POST['data'] ?? 'https://esempio.com';
+$stile     = $_POST['stile'] ?? 'quadrati';
+$coloreHex = $_POST['colore'] ?? '#000000';
+$sfondoHex = $_POST['sfondo'] ?? '#ffffff';
+$haLogo    = isset($_FILES['logo_file']) && $_FILES['logo_file']['error'] === UPLOAD_ERR_OK;
+
+function hexToRgb($hex) {
+    $hex = ltrim($hex, '#');
+    return [ hexdec(substr($hex,0,2)), hexdec(substr($hex,2,2)), hexdec(substr($hex,4,2)) ];
+}
+
+function svgToPng($svgPath, $size = 200) {
+    $svgContent = file_get_contents($svgPath);
+    if (class_exists('Imagick')) {
+        try {
+            $im = new Imagick();
+            $im->setBackgroundColor(new ImagickPixel('transparent'));
+            $im->setResolution(150, 150);
+            $im->readImageBlob($svgContent);
+            $im->setImageFormat('png32');
+            $im->resizeImage($size, $size, Imagick::FILTER_LANCZOS, 1, true);
+            $png = $im->getImageBlob();
+            $im->destroy();
+            return imagecreatefromstring($png);
+        } catch (Exception $e) { return null; }
+    }
+    return null;
+}
+
+function caricaLogo($path, $ext) {
+    if ($ext === 'png') return @imagecreatefrompng($path);
+    if (in_array($ext, ['jpg','jpeg'])) return @imagecreatefromjpeg($path);
+    if ($ext === 'gif') return @imagecreatefromgif($path);
+    if ($ext === 'svg') return svgToPng($path);
+    return null;
+}
+
+$coloreRgb = hexToRgb($coloreHex);
+$sfondoRgb = hexToRgb($sfondoHex);
 
 $options = new QROptions([
     'outputType'          => QRCode::OUTPUT_IMAGE_PNG,
@@ -22,52 +57,57 @@ $options = new QROptions([
     'drawCircularModules' => $stile === 'pallini',
     'circleRadius'        => 0.45,
     'imageTransparent'    => false,
-    'addLogoSpace'        => true,
-    'logoSpaceWidth'      => 13,
-    'logoSpaceHeight'     => 13,
+    'addLogoSpace'        => $haLogo,
+    'logoSpaceWidth'      => $haLogo ? 13 : 0,
+    'logoSpaceHeight'     => $haLogo ? 13 : 0,
 ]);
 
 try {
-    $qr = new QRCode($options);
+    // Step 1: genera QR base
+    $qr      = new QRCode($options);
     $imgData = $qr->render($data);
 
-    // Inserisci logo se caricato dall'utente
-    $logoPath = null;
-
-    if (isset($_FILES['logo_file']) && $_FILES['logo_file']['error'] === UPLOAD_ERR_OK) {
-        $logoPath = $_FILES['logo_file']['tmp_name'];
-    }
-
-    if ($logoPath && file_exists($logoPath)) {
-        $ext = strtolower(pathinfo($_FILES['logo_file']['name'], PATHINFO_EXTENSION));
-        $logo = null;
-        if ($ext === 'png') {
-            $logo = imagecreatefrompng($logoPath);
-        } elseif (in_array($ext, ['jpg', 'jpeg'])) {
-            $logo = imagecreatefromjpeg($logoPath);
-        } elseif ($ext === 'gif') {
-            $logo = imagecreatefromgif($logoPath);
+    // Step 2: applica colori personalizzati
+    $im      = imagecreatefromstring($imgData);
+    $w       = imagesx($im);
+    $h       = imagesy($im);
+    $output  = imagecreatetruecolor($w, $h);
+    imageAlphaBlending($output, false);
+    imageSaveAlpha($output, true);
+    $fgColor = imagecolorallocate($output, $coloreRgb[0], $coloreRgb[1], $coloreRgb[2]);
+    $bgColor = imagecolorallocate($output, $sfondoRgb[0], $sfondoRgb[1], $sfondoRgb[2]);
+    imagefill($output, 0, 0, $bgColor);
+    for ($x = 0; $x < $w; $x++) {
+        for ($y = 0; $y < $h; $y++) {
+            $pixel = imagecolorat($im, $x, $y);
+            if ((($pixel >> 16) & 0xFF) < 128) imagesetpixel($output, $x, $y, $fgColor);
         }
+    }
+    imagedestroy($im);
+
+    // Step 3: inserisci logo sopra (se presente)
+    if ($haLogo) {
+        $logoTmp = $_FILES['logo_file']['tmp_name'];
+        $ext     = strtolower(pathinfo($_FILES['logo_file']['name'], PATHINFO_EXTENSION));
+        $logo    = caricaLogo($logoTmp, $ext);
 
         if ($logo) {
-            $qrIm     = imagecreatefromstring($imgData);
-            $qrW      = imagesx($qrIm);
-            $qrH      = imagesy($qrIm);
-            $logoW    = imagesx($logo);
-            $logoH    = imagesy($logo);
-            $spazio   = intval($qrW * 0.22);
+            imageAlphaBlending($output, true);
+            $logoW    = imagesx($logo); $logoH = imagesy($logo);
+            $spazio   = intval($w * 0.22);
             $logoNewW = $spazio;
             $logoNewH = intval($spazio * $logoH / $logoW);
-            $logoX    = intval(($qrW - $logoNewW) / 2);
-            $logoY    = intval(($qrH - $logoNewH) / 2);
-            imagecopyresampled($qrIm, $logo, $logoX, $logoY, 0, 0, $logoNewW, $logoNewH, $logoW, $logoH);
-            ob_start();
-            imagepng($qrIm);
-            $imgData = ob_get_clean();
+            $logoX    = intval(($w - $logoNewW) / 2);
+            $logoY    = intval(($h - $logoNewH) / 2);
+            imagecopyresampled($output, $logo, $logoX, $logoY, 0, 0, $logoNewW, $logoNewH, $logoW, $logoH);
             imagedestroy($logo);
-            imagedestroy($qrIm);
         }
     }
+
+    ob_start();
+    imagepng($output);
+    $imgData = ob_get_clean();
+    imagedestroy($output);
 
     echo 'data:image/png;base64,' . base64_encode($imgData);
 
