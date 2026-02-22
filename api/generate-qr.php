@@ -9,19 +9,20 @@ requireLogin();
 use chillerlan\QRCode\QRCode;
 use chillerlan\QRCode\QROptions;
 
-$data      = $_POST['data'] ?? 'https://esempio.com';
-$stile     = $_POST['stile'] ?? 'quadrati';
+$data      = $_POST['data']   ?? 'https://esempio.com';
+$stile     = $_POST['stile']  ?? 'quadrati';
 $coloreHex = $_POST['colore'] ?? '#000000';
 $sfondoHex = $_POST['sfondo'] ?? '#ffffff';
 $haLogo    = isset($_FILES['logo_file']) && $_FILES['logo_file']['error'] === UPLOAD_ERR_OK;
 
+// ─── Helper: hex → rgb ───────────────────────────────────────────────────────
 function hexToRgb($hex) {
     $hex = ltrim($hex, '#');
     return [ hexdec(substr($hex,0,2)), hexdec(substr($hex,2,2)), hexdec(substr($hex,4,2)) ];
 }
 
-function svgToPng($svgPath, $size = 200) {
-    $svgContent = file_get_contents($svgPath);
+// ─── Helper: carica logo GD (per PNG) ───────────────────────────────────────
+function svgToPng($svgContent, $size = 200) {
     if (class_exists('Imagick')) {
         try {
             $im = new Imagick();
@@ -38,39 +39,34 @@ function svgToPng($svgPath, $size = 200) {
     return null;
 }
 
-function caricaLogo($path, $ext) {
-    if ($ext === 'png') return @imagecreatefrompng($path);
-    if (in_array($ext, ['jpg','jpeg'])) return @imagecreatefromjpeg($path);
-    if ($ext === 'gif') return @imagecreatefromgif($path);
-    if ($ext === 'svg') return svgToPng($path);
+function caricaLogoGd($path, $ext) {
+    if ($ext === 'png')                  return @imagecreatefrompng($path);
+    if (in_array($ext, ['jpg','jpeg']))  return @imagecreatefromjpeg($path);
+    if ($ext === 'gif')                  return @imagecreatefromgif($path);
+    if ($ext === 'svg')                  return svgToPng(file_get_contents($path));
     return null;
 }
 
-$coloreRgb = hexToRgb($coloreHex);
-$sfondoRgb = hexToRgb($sfondoHex);
+// ─── Genera PNG per l'anteprima (via GD, identico a create.php) ─────────────
+function generaQrPng($shortUrl, $stile, $coloreRgb, $sfondoRgb, $haLogo, $logoPath = null, $logoExt = null) {
+    $options = new QROptions([
+        'outputType'          => QRCode::OUTPUT_IMAGE_PNG,
+        'eccLevel'            => QRCode::ECC_H,
+        'scale'               => 10,
+        'imageBase64'         => false,
+        'drawCircularModules' => $stile === 'pallini',
+        'circleRadius'        => 0.45,
+        'imageTransparent'    => false,
+        'addLogoSpace'        => $haLogo,
+        'logoSpaceWidth'      => $haLogo ? 13 : 0,
+        'logoSpaceHeight'     => $haLogo ? 13 : 0,
+    ]);
 
-$options = new QROptions([
-    'outputType'          => QRCode::OUTPUT_IMAGE_PNG,
-    'eccLevel'            => QRCode::ECC_H,
-    'scale'               => 10,
-    'imageBase64'         => false,
-    'drawCircularModules' => $stile === 'pallini',
-    'circleRadius'        => 0.45,
-    'imageTransparent'    => false,
-    'addLogoSpace'        => $haLogo,
-    'logoSpaceWidth'      => $haLogo ? 13 : 0,
-    'logoSpaceHeight'     => $haLogo ? 13 : 0,
-]);
-
-try {
-    // Step 1: genera QR base
     $qr      = new QRCode($options);
-    $imgData = $qr->render($data);
+    $imgData = $qr->render($shortUrl);
 
-    // Step 2: applica colori personalizzati
     $im      = imagecreatefromstring($imgData);
-    $w       = imagesx($im);
-    $h       = imagesy($im);
+    $w       = imagesx($im); $h = imagesy($im);
     $output  = imagecreatetruecolor($w, $h);
     imageAlphaBlending($output, false);
     imageSaveAlpha($output, true);
@@ -85,12 +81,8 @@ try {
     }
     imagedestroy($im);
 
-    // Step 3: inserisci logo sopra (se presente)
-    if ($haLogo) {
-        $logoTmp = $_FILES['logo_file']['tmp_name'];
-        $ext     = strtolower(pathinfo($_FILES['logo_file']['name'], PATHINFO_EXTENSION));
-        $logo    = caricaLogo($logoTmp, $ext);
-
+    if ($haLogo && $logoPath && file_exists($logoPath)) {
+        $logo = caricaLogoGd($logoPath, $logoExt);
         if ($logo) {
             imageAlphaBlending($output, true);
             $logoW    = imagesx($logo); $logoH = imagesy($logo);
@@ -104,10 +96,39 @@ try {
         }
     }
 
-    ob_start();
-    imagepng($output);
-    $imgData = ob_get_clean();
+    ob_start(); imagepng($output); $result = ob_get_clean();
     imagedestroy($output);
+    return $result;
+}
+
+// ─── Esecuzione ─────────────────────────────────────────────────────────────
+try {
+    $coloreRgb = hexToRgb($coloreHex);
+    $sfondoRgb = hexToRgb($sfondoHex);
+
+    $logoPath = null;
+    $logoExt  = null;
+
+    // Se c'è un logo, salvalo in un tmp dedicato e stabile
+    if ($haLogo) {
+        $ext = strtolower(pathinfo($_FILES['logo_file']['name'], PATHINFO_EXTENSION));
+        if (in_array($ext, ['png','jpg','jpeg','gif','svg'])) {
+            // Usa sys_get_temp_dir() per un path temporaneo pulito
+            $logoPath = sys_get_temp_dir() . '/qr_logo_preview_' . session_id() . '.' . $ext;
+            move_uploaded_file($_FILES['logo_file']['tmp_name'], $logoPath);
+            $logoExt = $ext;
+        } else {
+            $haLogo = false;
+        }
+    }
+
+    // L'anteprima usa sempre il PNG (veloce, non richiede Imagick per la preview)
+    $imgData = generaQrPng($data, $stile, $coloreRgb, $sfondoRgb, $haLogo, $logoPath, $logoExt);
+
+    // Pulizia tmp logo
+    if ($logoPath && file_exists($logoPath)) {
+        @unlink($logoPath);
+    }
 
     echo 'data:image/png;base64,' . base64_encode($imgData);
 

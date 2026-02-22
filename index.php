@@ -31,16 +31,30 @@ if ($link['scade_il'] && strtotime($link['scade_il']) < time()) {
     die('Questo link è scaduto.');
 }
 
+// Leggi sorgente UTM se presente
+$sorgente = null;
+if (!empty($_GET['utm_source'])) {
+    $sorgenteRaw = strtolower(trim($_GET['utm_source']));
+    $sorgentiValide = ['instagram', 'facebook', 'linkedin', 'youtube', 'whatsapp', 'newsletter'];
+    if (in_array($sorgenteRaw, $sorgentiValide)) {
+        $sorgente = $sorgenteRaw;
+    } else {
+        // Accetta anche sorgenti non previste (es. custom) fino a 50 caratteri
+        $sorgente = substr($sorgenteRaw, 0, 50);
+    }
+}
+
 // Registra il click
 $stmt = $pdo->prepare("
-    INSERT INTO clicks (link_id, ip, device, browser) 
-    VALUES (?, ?, ?, ?)
+    INSERT INTO clicks (link_id, ip, device, browser, sorgente) 
+    VALUES (?, ?, ?, ?, ?)
 ");
 $stmt->execute([
     $link['id'],
     $_SERVER['REMOTE_ADDR'] ?? null,
     rilevaDevice($_SERVER['HTTP_USER_AGENT'] ?? ''),
-    rilevaBrowser($_SERVER['HTTP_USER_AGENT'] ?? '')
+    rilevaBrowser($_SERVER['HTTP_USER_AGENT'] ?? ''),
+    $sorgente,
 ]);
 
 // Redirect!

@@ -17,23 +17,64 @@ if (!$link) { header('Location: dashboard.php'); exit; }
 $errore   = '';
 $successo = '';
 
+$canaliDisponibili = [
+    'instagram'  => 'Instagram',
+    'facebook'   => 'Facebook',
+    'linkedin'   => 'LinkedIn',
+    'youtube'    => 'YouTube',
+    'whatsapp'   => 'WhatsApp',
+    'newsletter' => 'Newsletter',
+];
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $url      = trim($_POST['url'] ?? '');
     $titolo   = trim($_POST['titolo'] ?? '');
     $attivo   = isset($_POST['attivo']) ? 1 : 0;
     $scade_il = $_POST['scade_il'] ?? null;
 
+    $canaliSelezionati = [];
+    foreach (array_keys($canaliDisponibili) as $canale) {
+        $canaliSelezionati[$canale] = isset($_POST['canale_' . $canale]) ? 1 : 0;
+    }
+
     if (!validaURL($url)) {
         $errore = 'URL non valido. Assicurati di includere http:// o https://';
     } else {
-        $stmt = $pdo->prepare("UPDATE links SET url_destinazione = ?, titolo = ?, attivo = ?, scade_il = ? WHERE id = ?");
-        $stmt->execute([$url, $titolo ?: null, $attivo, $scade_il ?: null, $id]);
+        $stmt = $pdo->prepare("
+            UPDATE links SET
+                url_destinazione = ?,
+                titolo = ?,
+                attivo = ?,
+                scade_il = ?,
+                canale_instagram  = ?,
+                canale_facebook   = ?,
+                canale_linkedin   = ?,
+                canale_youtube    = ?,
+                canale_whatsapp   = ?,
+                canale_newsletter = ?
+            WHERE id = ?
+        ");
+        $stmt->execute([
+            $url,
+            $titolo ?: null,
+            $attivo,
+            $scade_il ?: null,
+            $canaliSelezionati['instagram'],
+            $canaliSelezionati['facebook'],
+            $canaliSelezionati['linkedin'],
+            $canaliSelezionati['youtube'],
+            $canaliSelezionati['whatsapp'],
+            $canaliSelezionati['newsletter'],
+            $id,
+        ]);
         $successo = 'Link aggiornato con successo!';
         $stmt = $pdo->prepare("SELECT * FROM links WHERE id = ?");
         $stmt->execute([$id]);
         $link = $stmt->fetch();
     }
 }
+
+$baseUrl = 'http://localhost:8888/shortlink/' . htmlspecialchars($link['codice']);
 ?>
 <!DOCTYPE html>
 <html lang="it">
@@ -98,6 +139,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .download-links a:hover { text-decoration: underline; }
 
         .nota { font-size: 12px; color: #aaa; margin-top: -14px; margin-bottom: 18px; }
+
+        /* Canali UTM */
+        .sezione-label { font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 14px; }
+        .canali-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+        .canale-check { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 2px solid #e0e0e0; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
+        .canale-check:hover { border-color: #d20a10; background: #fff5f5; }
+        .canale-check.checked { border-color: #d20a10; background: #fff5f5; }
+        .canale-check input[type="checkbox"] { width: 16px; height: 16px; accent-color: #d20a10; margin: 0; cursor: pointer; flex-shrink: 0; }
+        .canale-dot { width: 8px; height: 8px; border-radius: 50%; background: #d20a10; flex-shrink: 0; }
+        .canale-nome { font-size: 13px; font-weight: 700; color: #333; }
+
+        /* Link UTM pronti */
+        .utm-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid #f0f0f0; }
+        .utm-section h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 16px; }
+        .utm-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 10px 14px; background: #f9f9f9; border-radius: 8px; border: 1px solid #eee; }
+        .utm-label { font-size: 13px; font-weight: 700; color: #333; width: 100px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
+        .utm-dot { width: 8px; height: 8px; border-radius: 50%; background: #d20a10; flex-shrink: 0; }
+        .utm-url { font-size: 12px; color: #666; flex: 1; word-break: break-all; font-family: monospace; }
+        .btn-copia { padding: 6px 14px; background: #000; color: #fff; border: none; border-radius: 5px; font-size: 12px; font-weight: 700; font-family: 'Titillium Web', sans-serif; cursor: pointer; letter-spacing: 0.5px; transition: background 0.2s; flex-shrink: 0; }
+        .btn-copia:hover { background: #333; }
+        .btn-copia.copiato { background: #16a34a; }
     </style>
 </head>
 <body>
@@ -113,7 +175,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <h2>Informazioni link</h2>
 
             <div class="info-box">
-                <strong>Short URL:</strong> <span class="short-url">http://localhost:8888/shortlink/<?= htmlspecialchars($link['codice']) ?></span><br>
+                <strong>Short URL:</strong> <span class="short-url"><?= $baseUrl ?></span><br>
                 <strong>Creato il:</strong> <?= formattaData($link['creato_il']) ?>
             </div>
 
@@ -136,11 +198,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <label for="attivo">Link attivo</label>
                 </div>
 
-                <div class="btn-group">
+                <!-- Canali UTM -->
+                <div class="sezione-label">Canali di condivisione <span class="hint" style="text-transform:none;">(opzionale)</span></div>
+                <div class="canali-grid">
+                    <?php foreach ($canaliDisponibili as $chiave => $nome):
+                        $attivato = !empty($link['canale_' . $chiave]);
+                    ?>
+                    <label class="canale-check <?= $attivato ? 'checked' : '' ?>" id="label-<?= $chiave ?>">
+                        <input type="checkbox" name="canale_<?= $chiave ?>" value="1"
+                               <?= $attivato ? 'checked' : '' ?>
+                               onchange="toggleCanale('<?= $chiave ?>', this.checked)">
+                        <span class="canale-dot"></span>
+                        <span class="canale-nome"><?= $nome ?></span>
+                    </label>
+                    <?php endforeach; ?>
+                </div>
+
+                <div class="btn-group" style="margin-top: 24px;">
                     <button type="submit" class="btn">Salva modifiche</button>
                     <a href="dashboard.php" class="btn btn-secondary">Annulla</a>
                 </div>
             </form>
+
+            <!-- Link UTM pronti — visibili sempre se almeno un canale è attivo -->
+            <?php
+            $canaliAttivi = array_filter($canaliDisponibili, fn($k) => !empty($link['canale_' . $k]), ARRAY_FILTER_USE_KEY);
+            if (!empty($canaliAttivi)):
+            ?>
+            <div class="utm-section">
+                <h3>Link pronti per canale</h3>
+                <?php foreach ($canaliAttivi as $chiave => $nome):
+                    $utmUrl = $baseUrl . '?utm_source=' . $chiave;
+                ?>
+                <div class="utm-row">
+                    <div class="utm-label"><span class="utm-dot"></span><?= $nome ?></div>
+                    <div class="utm-url" id="utm-<?= $chiave ?>"><?= $utmUrl ?></div>
+                    <button class="btn-copia" onclick="copiaUtm('<?= $chiave ?>', '<?= $utmUrl ?>')">Copia</button>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <?php endif; ?>
         </div>
 
         <?php if ($link['qr_path']): ?>
@@ -156,5 +253,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         <?php endif; ?>
     </div>
+
+    <script>
+    function toggleCanale(chiave, checked) {
+        const label = document.getElementById('label-' + chiave);
+        if (checked) label.classList.add('checked');
+        else label.classList.remove('checked');
+    }
+
+    function copiaUtm(chiave, url) {
+        navigator.clipboard.writeText(url).then(() => {
+            const btn = event.target;
+            btn.textContent = 'Copiato!';
+            btn.classList.add('copiato');
+            setTimeout(() => { btn.textContent = 'Copia'; btn.classList.remove('copiato'); }, 2000);
+        });
+    }
+    </script>
 </body>
 </html>

@@ -46,29 +46,3 @@ function formattaData($data) {
     if (!$data) return '—';
     return date('d/m/Y H:i', strtotime($data));
 }
-
-// Genera un QR code SVG compatibile con Illustrator
-function generaQrSvg($testo, $percorso, $dimensione = 300) {
-    // Usa la libreria BaconQrCode per generare SVG puro
-    $renderer = new \BaconQrCode\Renderer\Image\SvgImageBackEnd();
-    $rendererStyle = new \BaconQrCode\Renderer\RendererStyle\RendererStyle($dimensione);
-    $svgRenderer = new \BaconQrCode\Renderer\ImageRenderer($rendererStyle, $renderer);
-    $writer = new \BaconQrCode\Writer($svgRenderer);
-    $writer->writeFile($testo, $percorso);
-}
-
-function generaSvgQr($testo, $percorso) {
-    // Usa endroid per ottenere la matrice del QR
-    $qr = \Endroid\QrCode\QrCode::create($testo)
-        ->setErrorCorrectionLevel(\Endroid\QrCode\ErrorCorrectionLevel::Low)
-        ->setEncoding(new \Endroid\QrCode\Encoding\Encoding('UTF-8'));
-
-    $writer = new \Endroid\QrCode\Writer\SvgWriter();
-    $result = $writer->write($qr);
-    
-    // Prendi l'SVG generato
-    $svgContent = $result->getString();
-    
-    // Salva il file
-    file_put_contents($percorso, $svgContent);
-}
